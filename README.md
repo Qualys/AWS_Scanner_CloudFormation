@@ -33,3 +33,11 @@ Use CloudFormation Template to create a Qualys EC2 Scanner using the AMI Qualys 
 3. A security group:
     A security group with inbound rules as SSH from anywhere is created. A default outbound rule allowing access to any protocol will also be created. This could be modified as per organization's policy.
 
+## AWS CLI to Run CloudFormation Template
+An Example:
+` aws cloudformation create-stack --stack-name myteststack --template-body file://Scanner.json --parameters ParameterKey=UserName,ParameterValue=mikesh ParameterKey=Password,ParameterValue=Mikeshpassword ParameterKey=SCANNERNAME,ParameterValue=TestKey ParameterKey=InstanceType,ParameterValue=t2.medium ParameterKey=BaseUrl,ParameterValue=https://qualysapi.qg2.apps.qualys.com  --capabilities CAPABILITY_IAM `
+
+## Note
+The CloudFormation template finds the AMI Id using `ec2 describe-images --filters "Name=name,Values=*1b8af947-aa54-4852-9da6-282428ba2f46*" ` and then does a quick sort to find the latest AMI ID based on the creation date.
+
+You can also filter AMIs based on `product-code`. Product code for Qualys Scanner is `1mp9h4zd2ze4biqif5schqeyu`
