@@ -1,10 +1,10 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: Template to automatically setup Qualys AWS EC2 AWS for Asset Scanning
 Metadata:
-  Author: "Mikesh Khanal"
-  Version: "1.0"
-  Updated: "1/11/2018"
-  Version Comments: "Adapted from Sham's Template"
+  Author: "Sadanand Nerurkar"
+  Version: "2.1"
+  Updated: "12/02/2018"
+  Version Comments: "updated to include changes related to urllib3 and name tag for scanner appliance"
 Parameters:
   UserName:
     Default: empty
@@ -20,8 +20,8 @@ Parameters:
     Description: Base URL of the Qualys Server
     Type: String
   SCANNERNAME:
-    Default: Empty
-    Description: (Optional) name you want to give to your scanner appliance
+    Default: "Qualys Scanner Appliance"
+    Description: name you want to give to your scanner appliance
     Type: String
   InstanceType:
     Description: Qualys Scanner instance size
@@ -47,7 +47,6 @@ Parameters:
 
 Resources:
   AWSFunction:
-    DependsOn: LambdaExecutionRole
     Type: AWS::Lambda::Function
     Properties:
       Environment:
@@ -58,70 +57,71 @@ Resources:
           PASSWORD: !Ref Password
       Code:
         ZipFile: !Sub |
+          import boto3
+          import base64
+          import logging.config
+          import xml.etree.ElementTree as ET
+          import cfnresponse
+          import os,sys
+          import urllib3
+
           def lambda_handler(event, context):
-            import boto3
-            import base64
-            import logging.config
-            import xml.etree.ElementTree as ET
-            import cfnresponse
-            import os,sys
-            import botocore.vendored.requests as requests
-            region = context.invoked_function_arn.split(":")[3]
-            accountId = context.invoked_function_arn.split(":")[4]
-            SCANNERNAME = os.getenv('SCANNERNAME')
-            username = os.getenv('USERNAME')
-            password = os.getenv('PASSWORD')
-            BASEURL = os.getenv('BASEURL')
-            ec2 = boto3.client('ec2')
-            filters = [{'Name': 'name', 'Values': ['*1b8af947-aa54-4852-9da6-282428ba2f46*']}]
-            images = ec2.describe_images(Filters=filters) 
-            imagelist = images['Images']
-            print ("The number of images for scanner is {}".format(len(imagelist)))
-            AMIID = imagelist[0]['ImageId']
-            if (len(imagelist)>0):
-                imagecreationdate = images['Images'][0]['CreationDate']
-                for i in range (len(imagelist)-1):
-                    j = 0
-                    if imagecreationdate < images['Images'][i]['CreationDate']:
-                        imagecreationdate = images['Images'][i]['CreationDate']
-                        j = i
-                AMIID = images['Images'][j]['ImageId']
-            print ("ImageId = {}".format(AMIID))
-            usrPass = str(username)+':'+str(password)
-            b64Val = base64.b64encode(str(usrPass).encode('ascii'))
-            headers = {
-            'X-Requested-With' : 'python requests',
-            'Authorization': "Basic %s" % b64Val,
-            'Content': 'text/xml'
-            }
-            try:
-                rURL = BASEURL + "/api/2.0/fo/appliance/"
-                params = {"action":"create","name":SCANNERNAME}
-                print ("URl =  {}".format(rURL))
-                print ("Body =  {}".format(params))
-                print("Headers = {}".format(headers))            
-                qurl = requests.post(rURL,  params=params, headers=headers)
-                print ("The status code = {}".format(qurl.status_code))
-                #qurl = 'curl -v -u {}:{} -H "X-Requested-With:Curl" -X "POST" -d "action=create&echo_request=1&name={}" "{}/api/2.0/fo/appliance/"'.format(username, password,SCANNERNAME,BASEURL)
-                #result = os.popen(qurl).read()
-                print ("XML = {}".format((qurl.text)))
-                tree = ET.fromstring(qurl.text)
-                if (tree.find('RESPONSE/CODE') is None):             
-                    PERS = tree.find('RESPONSE/APPLIANCE/ACTIVATION_CODE').text
-                    responseData = {}
-                    responseData['PERS'] = PERS
-                    responseData['AMIID'] = AMIID
-                else:
-                    print("The Error code {}:{}".format(tree.find('RESPONSE/CODE').text,tree.find('RESPONSE/TEXT').text))
-                    exit(0)
-            except IOError as e:
-                print ("Status with error {1}: {2}".format(e.errno, e.strerror))
-            cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
+              region = context.invoked_function_arn.split(":")[3]
+              accountId = context.invoked_function_arn.split(":")[4]
+              SCANNERNAME = os.getenv('SCANNERNAME')
+              username = os.getenv('USERNAME')
+              password = os.getenv('PASSWORD')
+              BASEURL = os.getenv('BASEURL')
+              ec2 = boto3.client('ec2')
+              filters = [{'Name': 'name', 'Values': ['*1b8af947-aa54-4852-9da6-282428ba2f46*']}]
+              images = ec2.describe_images(Filters=filters)
+              imagelist = images['Images']
+              print ("The number of images for scanner is {}".format(len(imagelist)))
+              AMIID = imagelist[0]['ImageId']
+              if (len(imagelist)>0):
+                  imagecreationdate = images['Images'][0]['CreationDate']
+                  for i in range (len(imagelist)-1):
+                      j = 0
+                      if imagecreationdate < images['Images'][i]['CreationDate']:
+                          imagecreationdate = images['Images'][i]['CreationDate']
+                          j = i
+                  AMIID = images['Images'][j]['ImageId']
+              print ("ImageId = {}".format(AMIID))
+              auth = username + ":" + password
+              headers = urllib3.make_headers(basic_auth=auth)
+              headers['X-Requested-With'] = 'python requests'
+              headers['Content'] = 'text/xml'
+
+              try:
+                  api_endpoint = "{}/api/2.0/fo/appliance/".format(BASEURL)
+                  params = {'action':'create','name': SCANNERNAME}
+                  print ("URl =  {}".format(api_endpoint))
+                  print ("Body =  {}".format(params))
+                  print("Headers = {}".format(headers))
+                  http = urllib3.PoolManager()
+                  qurl = http.request('POST', api_endpoint, fields=params, headers=headers)
+                  #qurl = 'curl -v -u {}:{} -H "X-Requested-With:Curl" -X "POST" -d "action=create&echo_request=1&name={}" "{}/api/2.0/fo/appliance/"'.format(username, password,SCANNERNAME,BASEURL)
+                  #result = os.popen(qurl).read()
+                  response_status = qurl.status
+                  data_decode = qurl.data.decode('utf-8')
+                  print(data_decode)
+                  tree = ET.fromstring(data_decode)
+                  if tree.find('RESPONSE/CODE') is None:
+                      PERS = tree.find('RESPONSE/APPLIANCE/ACTIVATION_CODE').text
+                      responseData = {}
+                      responseData['PERS'] = PERS
+                      responseData['AMIID'] = AMIID
+                  else:
+                      print("The Error code {}:{}".format(tree.find('RESPONSE/CODE').text,tree.find('RESPONSE/TEXT').text))
+                      exit(0)
+              except IOError as e:
+                  print ("Status with error {1}: {2}".format(e.errno, e.strerror))
+              cfnresponse.send(event, context, cfnresponse.SUCCESS, responseData)
       Description: Lambda Function to create a Qualys Virtual Scanner in QCP
       Handler: index.lambda_handler
       Role: !GetAtt 'LambdaExecutionRole.Arn'
       Runtime: python3.6
-      Timeout: '120'
+      Timeout: '300'
   LambdaExecutionRole:
     Type: AWS::IAM::Role
     Properties:
@@ -161,10 +161,11 @@ Resources:
      ImageId: !GetAtt 'CustomResource.AMIID'
      SubnetId: !Ref Subnets
      InstanceType: !Ref InstanceType
+     Tags: [{"Key": "Name", "Value": !Ref SCANNERNAME}]
      UserData:
       Fn::Base64: !Sub |
        PERSCODE=${CustomResource.PERS}
-       
+
   CustomResource:
     Type: Custom::CustomResource
     Properties:
